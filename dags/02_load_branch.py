@@ -2,11 +2,12 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator 
 from airflow.operators.python import BranchPythonOperator 
 from airflow.models.connection import Connection
+from airflow.utils.trigger_rule import TriggerRule
 from time import time_ns
 from datetime import datetime , timedelta
 from airflow.utils.dates import days_ago
 from datetime import date
-from airflow.utils.trigger_rule import TriggerRule
+
 
 default_args = {
     'owner': 'Datapath',

@@ -340,13 +340,13 @@ def load_departments():
 ################################################################
 def load_master():
     print(f" INICIO LOAD MASTER")
-    client = bigquery.Client()
+    client = bigquery.Client(project='amiable-webbing-411501')
     sql = """
         SELECT *
         FROM `amiable-webbing-411501.dep_raw.order_items`
     """
     m_order_items_df = client.query(sql).to_dataframe()
-    client = bigquery.Client()
+    client = bigquery.Client(project='amiable-webbing-411501')
     sql_2 = """
         SELECT *
         FROM `amiable-webbing-411501.dep_raw.orders`

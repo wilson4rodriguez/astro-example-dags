@@ -11,7 +11,7 @@ from google.cloud import bigquery
 import pandas as pd
 
 default_args = {
-    'owner': 'Datapath',
+    'owner': 'WilsonR',
     'depends_on_past': False,
     'email_on_failure': False,
     'email_on_retry': False,
@@ -40,6 +40,15 @@ def transform_date(text):
     return d
 
 
+def get_group_status(text):
+    text = str(text)
+    if text =='CLOSED':
+        d='END'
+    elif text =='COMPLETE':
+        d='END'
+    else :
+        d='TRANSIT'
+    return d
 
 
 
@@ -329,7 +338,132 @@ def load_departments():
 ################################################################
 def load_master():
     print(f" INICIO LOAD MASTER")
+    client = bigquery.Client()
+    sql = """
+        SELECT *
+        FROM `amiable-webbing-411501.dep_raw.order_items`
+    """
+    m_order_items_df = client.query(sql).to_dataframe()
+    client = bigquery.Client()
+    sql_2 = """
+        SELECT *
+        FROM `amiable-webbing-411501.dep_raw.orders`
+    """
+    m_orders_df = client.query(sql_2).to_dataframe()
+    df_join = m_orders_df.merge(m_order_items_df, left_on='order_id', right_on='order_item_order_id', how='inner')
+    df_master=df_join[[ 'order_id', 'order_date_x', 'order_customer_id',
+       'order_status',  'order_item_id',
+       'order_item_order_id', 'order_item_product_id', 'order_item_quantity',
+       'order_item_subtotal', 'order_item_product_price']]
+    df_master=df_master.rename(columns={"order_date_x":"order_date"})
+    df_master['order_status_group']  = df_master['order_status'].map(get_group_status)
+    df_master['order_date'] = df_master['order_date'].astype(str)
+    df_master['order_date'] = pd.to_datetime(df_master['order_date'], format='%Y-%m-%d').dt.date
+    ##ADD ORDER_ITEMS_SUBTOTAL_MN#####
+    tipo_cambio = pd.read_csv("https://www.sunat.gob.pe/a/txt/tipoCambio.txt",sep='|',header=None).rename(columns={0:"Fecha",1:"Precio_venta",2:"Precio_Compra"})
+    t_cam=tipo_cambio["Precio_venta"][0]
+    df_master['order_item_subtotal_mn'] = df_master['order_item_subtotal'].apply(lambda x: x*t_cam)
 
+    df_master_rows=len(df_master)
+    if df_master_rows>0 :
+        client = bigquery.Client(project='amiable-webbing-411501')
+
+        table_id =  "amiable-webbing-411501.dep_raw.master_order"
+        job_config = bigquery.LoadJobConfig(
+            schema=[
+                bigquery.SchemaField("order_id", bigquery.enums.SqlTypeNames.INTEGER),
+                bigquery.SchemaField("order_date", bigquery.enums.SqlTypeNames.DATE),
+                bigquery.SchemaField("order_customer_id", bigquery.enums.SqlTypeNames.INTEGER),
+                bigquery.SchemaField("order_status", bigquery.enums.SqlTypeNames.STRING),
+                bigquery.SchemaField("order_item_id", bigquery.enums.SqlTypeNames.INTEGER),
+                bigquery.SchemaField("order_item_order_id", bigquery.enums.SqlTypeNames.INTEGER),
+                bigquery.SchemaField("order_item_product_id", bigquery.enums.SqlTypeNames.INTEGER),
+                bigquery.SchemaField("order_item_quantity", bigquery.enums.SqlTypeNames.INTEGER),
+                bigquery.SchemaField("order_item_subtotal", bigquery.enums.SqlTypeNames.FLOAT),
+                bigquery.SchemaField("order_item_product_price", bigquery.enums.SqlTypeNames.FLOAT),
+                bigquery.SchemaField("order_status_group", bigquery.enums.SqlTypeNames.STRING),
+                bigquery.SchemaField("order_item_subtotal_mn", bigquery.enums.SqlTypeNames.FLOAT),
+            ],
+            write_disposition="WRITE_TRUNCATE",
+        )
+
+
+        job = client.load_table_from_dataframe(
+            df_master, table_id, job_config=job_config
+        )  
+        job.result()  # Wait for the job to complete.
+
+        table = client.get_table(table_id)  # Make an API request.
+        print(
+            "Loaded {} rows and {} columns to {}".format(
+                table.num_rows, len(table.schema), table_id
+            )
+        )
+    else : 
+        print('alerta no hay registros en la tabla master_order')
+
+
+################################################################
+#################### LOAD TABLE BI #############################
+################################################################
+def load_table_bi():
+    print(f" INICIO LOAD AND CREATE BI")
+    client = bigquery.Client(project='amiable-webbing-411501')
+    query_string = """
+    create or replace table `amiable-webbing-411501.dep_raw.bi_orders` as
+    SELECT 
+    order_date,c.category_name ,d.department_name 
+    , sum (a.order_item_subtotal) order_item_subtotal
+    , sum (a.order_item_quantity) order_item_quantity
+    FROM `amiable-webbing-411501.dep_raw.master_order` a
+    inner join  `amiable-webbing-411501.dep_raw.products` b on
+    a.order_item_product_id=b.product_id
+    inner join `amiable-webbing-411501.dep_raw.categories` c on
+    b.product_category_id=c.category_id
+    inner join `amiable-webbing-411501.dep_raw.departments` d on
+    c.category_department_id=d.department_id
+    group by order_date,c.category_name ,d.department_name
+    """
+    query_job = client.query(query_string)
+    rows = list(query_job.result())
+    print(rows)
+
+################################################################
+#################### LOAD AND CREATE CLIENT_SEGMENT ############
+################################################################
+def load_customer_segment():
+    print(f" INICIO LOAD AND CREATE CUSTOMER SEGMENT")
+    client = bigquery.Client(project='amiable-webbing-411501')
+    query_string = """
+    create or replace table `amiable-webbing-411501.dep_raw.customer_segment` as
+    select customer_id,category_name , order_item_subtotal from
+    (
+    SELECT customer_id,category_name,order_item_subtotal,
+    RANK() OVER (PARTITION BY customer_id ORDER BY order_item_subtotal DESC) AS rank_ 
+    FROM (
+        SELECT 
+        d.customer_id ,c.category_name 
+        , sum (a.order_item_subtotal) order_item_subtotal
+        FROM `amiable-webbing-411501.dep_raw.master_order` a
+        inner join  `amiable-webbing-411501.dep_raw.products` b on
+        a.order_item_product_id=b.product_id
+        inner join `amiable-webbing-411501.dep_raw.categories` c on
+        b.product_category_id=c.category_id
+        inner join `amiable-webbing-411501.dep_raw.customers` d on
+        a.order_customer_id=d.customer_id
+        group by 1,2
+        )
+    )
+    where rank_=1
+    """
+    query_job = client.query(query_string)
+    rows = list(query_job.result())
+    print(rows)    
+################################################################
+#################### LOAD CUSTOMER SEGMENT ON MONGODB ##########
+################################################################
+def load_customer_seg_mongodb():
+    print(f" INICIO LOAD CUSTOMER_MONGODB")
 
 
 ################################################################
@@ -381,6 +515,21 @@ with DAG(
         python_callable=load_master,
         dag=dag
     )
+    step_bi= PythonOperator(
+        task_id='load_bi_id',
+        python_callable=load_table_bi,
+        dag=dag
+    )
+    step_customer_seg= PythonOperator(
+        task_id='load_customer_seg_id',
+        python_callable=load_customer_segment,
+        dag=dag
+    )
+    step_customer_seg_mongodb= PythonOperator(
+        task_id='load_customer_seg_mongodb_id',
+        python_callable=load_customer_seg_mongodb,
+        dag=dag
+    )
     step_end = PythonOperator(
         task_id='end_id',
         python_callable=end_process,
@@ -399,6 +548,10 @@ with DAG(
     step_load_customers>>step_master
     step_load_categories>>step_master
     step_load_departments>>step_master
-    step_master>>step_end
+    step_master>>step_bi
+    step_master>>step_customer_seg
+    step_customer_seg>>step_customer_seg_mongodb
+    step_customer_seg_mongodb>>step_end
+    step_bi>>step_end
     ###DAG NORMAL###
     #step_start>>step_load_orders>>step_load_order_items>>step_load_products>>step_load_customers>>step_load_categories>>step_load_departments>>step_end

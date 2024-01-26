@@ -19,19 +19,76 @@ default_args = {
     'retry_delay': timedelta(minutes=1),
 }
 
+################################################################
+#################### AUX FUNCTIONS ##############################
+################################################################
 def get_connect_mongo():
 
     CONNECTION_STRING ="mongodb+srv://atlas:T6.HYX68T8Wr6nT@cluster0.enioytp.mongodb.net/?retryWrites=true&w=majority"
     client = MongoClient(CONNECTION_STRING)
 
     return client
-    
+
+def transform_date(text):
+    text = str(text)
+    d = text[0:10]
+    return d
+
+
+
+
+
 def start_process():
     print(" INICIO EL PROCESO!")
 
 def end_process():
     print(" FIN DEL PROCESO!")
 
+################################################################
+#################### LOAD ORDERS ##############################
+################################################################
+def load_orders():
+    print(f" INICIO LOAD ORDERS")
+    dbconnect = get_connect_mongo()
+    dbname=dbconnect["retail_db"]
+    collection_name = dbname["orders"] 
+    orders = collection_name.find({})  
+    orders_df = DataFrame(orders)
+    dbconnect.close()
+    orders_df['_id'] = orders_df['_id'].astype(str)
+    orders_df['order_date']  = orders_df['order_date'].map(transform_date)
+    orders_df['order_date'] = pd.to_datetime(orders_df['order_date'], format='%Y-%m-%d').dt.date
+    orders_rows=len(orders_df)
+    if orders_rows>0 :
+        client = bigquery.Client(roject='amiable-webbing-411501')
+        table_id =  "amiable-webbing-411501.dep_raw.orders"
+        job_config = bigquery.LoadJobConfig(
+            schema=[
+                bigquery.SchemaField("_id", bigquery.enums.SqlTypeNames.STRING),
+                bigquery.SchemaField("order_id", bigquery.enums.SqlTypeNames.INTEGER),
+                bigquery.SchemaField("order_date", bigquery.enums.SqlTypeNames.DATE),
+                bigquery.SchemaField("order_customer_id", bigquery.enums.SqlTypeNames.INTEGER),
+                bigquery.SchemaField("order_status", bigquery.enums.SqlTypeNames.STRING),
+            ],
+            write_disposition="WRITE_TRUNCATE",
+        )
+        job = client.load_table_from_dataframe(
+            orders_df, table_id, job_config=job_config
+        )  
+        job.result()  # Wait for the job to complete.
+
+        table = client.get_table(table_id)  # Make an API request.
+        print(
+            "Loaded {} rows and {} columns to {}".format(
+                table.num_rows, len(table.schema), table_id
+            )
+        )
+    else : 
+        print('alerta no hay registros en la tabla orders')
+
+################################################################
+#################### LOAD PRODUCTS##############################
+################################################################
 def load_products():
     print(f" INICIO LOAD PRODUCTS")
     dbconnect = get_connect_mongo()
@@ -87,7 +144,12 @@ with DAG(
         python_callable=start_process,
         dag=dag
     )
-    step_load = PythonOperator(
+    step_load_orders = PythonOperator(
+        task_id='load_orders_id',
+        python_callable=load_orders,
+        dag=dag
+    )
+    step_load_products = PythonOperator(
         task_id='load_products_id',
         python_callable=load_products,
         dag=dag
@@ -97,4 +159,4 @@ with DAG(
         python_callable=end_process,
         dag=dag
     )
-    step_start>>step_load>>step_end
+    step_start>>step_load_orders>>step_load_products>>step_end

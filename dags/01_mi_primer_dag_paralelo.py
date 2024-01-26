@@ -27,7 +27,7 @@ def load_raw_1():
     print(" Hola Raw 1!")
 
 with DAG(
-    dag_id="mi_primer_dag_paralelo",
+    dag_id="mi_primer_dag_paralelo cambioooo",
     schedule="20 04 * * *", 
     start_date=days_ago(2), 
     default_args=default_args,

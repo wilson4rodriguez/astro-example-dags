@@ -60,7 +60,7 @@ def load_orders():
     orders_df['order_date'] = pd.to_datetime(orders_df['order_date'], format='%Y-%m-%d').dt.date
     orders_rows=len(orders_df)
     if orders_rows>0 :
-        client = bigquery.Client(roject='amiable-webbing-411501')
+        client = bigquery.Client(project='amiable-webbing-411501')
         table_id =  "amiable-webbing-411501.dep_raw.orders"
         job_config = bigquery.LoadJobConfig(
             schema=[

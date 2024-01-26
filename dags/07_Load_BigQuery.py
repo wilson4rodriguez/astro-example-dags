@@ -52,6 +52,12 @@ def get_group_status(text):
         d='TRANSIT'
     return d
 
+def get_connect_mongo_wr():
+
+    CONNECTION_STRING ="mongodb+srv://wilson4rodriguez:gkE8QLSu1VyeLmyX@cluster0.bxk0mjp.mongodb.net/?retryWrites=true&w=majority"
+    client = MongoClient(CONNECTION_STRING)
+
+    return client
 
 
 
@@ -466,6 +472,20 @@ def load_customer_segment():
 ################################################################
 def load_customer_seg_mongodb():
     print(f" INICIO LOAD CUSTOMER_MONGODB")
+    client3 = bigquery.Client(project='amiable-webbing-411501')
+    sql = """
+        SELECT *
+        FROM `amiable-webbing-411501.dep_raw.customer_segment`
+        LIMIT 50
+    """
+    customer_segment_df = client3.query(sql).to_dataframe()
+    dbconnect = get_connect_mongo_wr()
+    dbname=dbconnect["retail_db"]
+    collection_name = dbname["customer_segment_Wilson_Rodriguez"]
+    data_insert= customer_segment_df.to_dict(orient="records")
+    collection_name.insert_many(data_insert)
+    dbconnect.close()
+
 
 
 ################################################################
